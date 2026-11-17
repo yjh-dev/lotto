@@ -1,0 +1,9 @@
+node_modules
+dist
+.DS_Store
+*.log
+data/lotto.db-wal
+data/lotto.db-shm
+logs
+dist-app
+data/lotto.db
