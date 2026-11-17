@@ -4,4 +4,5 @@
     <string name="title_activity_main">로또 통계</string>
     <string name="package_name">local.lotto.stats</string>
     <string name="custom_url_scheme">local.lotto.stats</string>
+    <string name="widget_description">이번 주 추천 번호</string>
 </resources>

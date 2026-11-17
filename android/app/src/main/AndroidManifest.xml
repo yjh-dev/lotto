@@ -24,6 +24,14 @@
 
         </activity>
 
+        <!-- 홈 화면 위젯: 이번 주 추천 번호 -->
+        <receiver android:name=".LottoWidgetProvider" android:exported="false" android:label="로또 추천">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_lotto_info" />
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

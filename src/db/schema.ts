@@ -83,6 +83,10 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX purchases_round ON purchases (target_round);
   `,
+  // v3 — 당첨금 수령 표시
+  `ALTER TABLE purchases ADD COLUMN claimed_at TEXT;`,
+  // v4 — 추천 방식(기본/핫 번호). 기존 기본 키(target_round, idx)를 유지하려고 핫 번호 방식은 idx 100부터
+  `ALTER TABLE recommendations ADD COLUMN strategy TEXT NOT NULL DEFAULT 'default';`,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

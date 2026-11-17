@@ -4,9 +4,24 @@ import type { StrategyResult } from '../stats/backtest.ts';
 import type { RecommendResult } from '../recommend/recommend.ts';
 import type { RuleAuditRow } from '../recommend/rules.ts';
 
-export const RESULTS_VERSION = 10;
+export const RESULTS_VERSION = 14;
 
-/** 선택한 기간의 통계·규칙 감시·추천 — 기간이 바뀌면 다시 계산 */
+/**
+ * 홈: 이번 주 추천 — 기간과 무관. 규칙 판정(과거 조합·최근 10회)과 규칙 감시는 전체 회차 기준
+ * (모든 조합의 확률이 같으므로 표본 기간이 추천 번호를 바꿀 근거가 없음)
+ */
+export interface HomeResults {
+  version: number;
+  lastRound: number;
+  /** 전체 회차 규칙 감시 → 경고된 규칙은 추천에서 해제 */
+  disabled: string[];
+  /** 기본 방식 (비인기 우선) */
+  recommendation: RecommendResult;
+  /** 핫 번호 방식 (최근 50회 상위 번호를 게임마다 2개) */
+  hotRecommendation: RecommendResult;
+}
+
+/** 선택한 기간의 통계·규칙 감시 — 기간이 바뀌면 다시 계산 */
 export interface PeriodResults {
   version: number;
   lastRound: number;
@@ -18,13 +33,12 @@ export interface PeriodResults {
   backtest: StrategyResult[] | null;
   /** 이 기간 당첨번호로 우리 규칙을 감시한 결과 */
   audit: RuleAuditRow[];
-  /** 감시에서 경고된 규칙을 해제하고 만든 추천 (대상은 항상 다음 회차) */
-  recommendation: RecommendResult;
 }
 
 export type WorkerRequest =
   | { id: number; type: 'period'; draws: unknown[]; from: number; to: number; iterations: number }
-  | { id: number; type: 'recommend'; draws: unknown[]; seed: number; disabled: string[] };
+  | { id: number; type: 'home'; draws: unknown[] }
+  | { id: number; type: 'recommend'; draws: unknown[]; seed: number; disabled: string[]; fixed: number[]; strategy: 'default' | 'hot' };
 
 export type WorkerResponse =
   | { id: number; ok: true; result: unknown }

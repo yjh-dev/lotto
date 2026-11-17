@@ -20,7 +20,9 @@ export interface FetchLogEntry {
 
 export interface StoredRecommendation {
   targetRound: number;
+  /** 회차 안 순서 (기본 방식 0~, 핫 번호 방식 100~) */
   idx: number;
+  strategy: 'default' | 'hot';
   numbers: number[];
   createdAt: string;
   /** 추첨 후 기록: 일치 개수, 등수(0 = 낙첨) */
@@ -39,6 +41,8 @@ export interface StoredPurchase {
   matched: number | null;
   prizeRank: number | null;
   prizeAmount: number | null;
+  /** 당첨금 받은 날 (안 받았으면 null) */
+  claimedAt: string | null;
 }
 
 /** 등수 판정 (보너스는 5개 일치일 때만) */
@@ -201,13 +205,15 @@ export class LottoRepository {
     seed: number,
     picks: { numbers: number[] }[],
     now = new Date(),
+    strategy: 'default' | 'hot' = 'default',
   ): Promise<void> {
+    const base = strategy === 'hot' ? 100 : 0;
     await this.db.batch(
       picks.map((p, idx) => ({
-        sql: `INSERT OR IGNORE INTO recommendations (target_round, idx, seed, n1, n2, n3, n4, n5, n6, multiplier, ev_low, ev, ev_high, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        // multiplier·ev 열은 인기도 모형 시절(~2026-11) 값 — 지금은 0으로 기록
-        params: [targetRound, idx, seed, ...p.numbers, 0, 0, 0, 0, now.toISOString()],
+        sql: `INSERT OR IGNORE INTO recommendations (target_round, idx, seed, n1, n2, n3, n4, n5, n6, multiplier, ev_low, ev, ev_high, created_at, strategy)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        // multiplier·ev 열은 예전 인기도 모형 시절 값 — 지금은 0으로 기록
+        params: [targetRound, base + idx, seed, ...p.numbers, 0, 0, 0, 0, now.toISOString(), strategy],
       })),
     );
   }
@@ -237,6 +243,7 @@ export class LottoRepository {
     return rows.map((r) => ({
       targetRound: r.target_round as number,
       idx: r.idx as number,
+      strategy: (r.strategy as 'default' | 'hot') ?? 'default',
       numbers: [r.n1, r.n2, r.n3, r.n4, r.n5, r.n6] as number[],
       createdAt: r.created_at as string,
       matched: r.matched as number | null,
@@ -258,6 +265,14 @@ export class LottoRepository {
     );
     await this.evaluatePurchases();
     return before ? 0 : ticket.games.length;
+  }
+
+  /** 당첨금 수령 표시 (당첨된 게임만). @returns 바뀐 게임 수 */
+  async setClaimed(ticketKey: string, slot: number, claimed: boolean, now = new Date()): Promise<number> {
+    const rows = await this.db.all<{ c: number }>('SELECT COUNT(*) AS c FROM purchases WHERE ticket_key = ? AND slot = ? AND prize_rank > 0', [ticketKey, slot]);
+    if (!rows[0].c) return 0;
+    await this.db.run('UPDATE purchases SET claimed_at = ? WHERE ticket_key = ? AND slot = ?', [claimed ? now.toISOString() : null, ticketKey, slot]);
+    return 1;
   }
 
   async deletePurchase(ticketKey: string): Promise<number> {
@@ -302,6 +317,7 @@ export class LottoRepository {
       matched: r.matched as number | null,
       prizeRank: r.prize_rank as number | null,
       prizeAmount: r.prize_amount as number | null,
+      claimedAt: r.claimed_at as string | null,
     }));
   }
 }

@@ -11,7 +11,7 @@
 import { openNodeDb } from '../src/db/node-db.ts';
 import { LottoRepository } from '../src/db/repository.ts';
 import { createApp } from './app.ts';
-import { DB_PATH, DIST_DIR } from './paths.ts';
+import { DB_PATH, DIST_DIR, RELEASE_DIR } from './paths.ts';
 
 const HOSTS = (process.env.HOST ?? '127.0.0.1').split(',').map((h) => h.trim()).filter(Boolean);
 const PORT = Number(process.env.PORT ?? 8645);
@@ -21,7 +21,7 @@ await repo.init();
 const last = await repo.lastRound();
 
 for (const host of HOSTS) {
-  const server = createApp(repo, { distDir: DIST_DIR });
+  const server = createApp(repo, { distDir: DIST_DIR, releaseDir: RELEASE_DIR, backup: true });
   server.on('error', (e) => {
     // 부팅 직후 Tailscale 주소가 아직 없을 수 있음 → 종료하면 launchd(KeepAlive)가 잠시 후 다시 실행
     console.error(`${new Date().toISOString()} ✗ ${host}:${PORT} 열기 실패: ${e.message}`);

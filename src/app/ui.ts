@@ -34,8 +34,8 @@ export function tile(label: string, value: string, note = ''): string {
 }
 
 /** 카드: 제목 + (오른쪽) 배지 + 내용 + (선택) 접힌 이론 */
-export function card(title: string, body: string, opts: { badge?: string; theory?: string; id?: string } = {}): string {
-  return `<section class="card"${opts.id ? ` id="${opts.id}"` : ''}>
+export function card(title: string, body: string, opts: { badge?: string; theory?: string; id?: string; cls?: string } = {}): string {
+  return `<section class="card${opts.cls ? ` ${opts.cls}` : ''}"${opts.id ? ` id="${opts.id}"` : ''}>
     <div class="card-head"><h2>${title}</h2>${opts.badge ?? ''}</div>
     ${body}
     ${opts.theory ? `<details class="theory"><summary>이론</summary><div class="body">${opts.theory}</div></details>` : ''}

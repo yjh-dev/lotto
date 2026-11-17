@@ -10,11 +10,8 @@ import { validateDraw } from './normalize.ts';
 import { decideFetch, type Attempt, type FetchDecision } from './fetchPolicy.ts';
 import type { StoredPurchase, StoredRecommendation } from '../db/repository.ts';
 
-/**
- * 맥북 서버 주소. 개발(Vite)·맥북이 제공하는 웹 화면: 같은 주소의 '/api'.
- * APK: 빌드 시 VITE_API_BASE=https://<맥북>.<tailnet>.ts.net:8443/api
- */
-export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api';
+import { API_BASE } from './api.ts';
+export { API_BASE, APK_URL, APP_VERSION, APP_VERSION_NAME } from './api.ts';
 
 const EXTRA_KEY = 'lotto.extraDraws.v1';
 const ATTEMPTS_KEY = 'lotto.syncAttempts.v1';
@@ -89,7 +86,7 @@ export async function syncDraws(current: Draw[] = getDraws(), force = false, now
 /** 맥북에 기록된 회차별 기본 추천과 채점 결과 (연결 안 되면 null) */
 export async function fetchRecommendationHistory(): Promise<StoredRecommendation[] | null> {
   try {
-    const res = await fetch(`${API_BASE}/recommendations?limit=60`, { signal: AbortSignal.timeout(8_000) });
+    const res = await fetch(`${API_BASE}/recommendations?limit=400`, { signal: AbortSignal.timeout(8_000) });
     if (!res.ok) return null;
     return ((await res.json()) as { recommendations: StoredRecommendation[] }).recommendations;
   } catch {
@@ -100,12 +97,14 @@ export async function fetchRecommendationHistory(): Promise<StoredRecommendation
 // ───────── 구매 기록 (용지 QR → 맥북 DB) ─────────
 
 export type SaveResult = { status: 'saved' | 'duplicate' | 'queued' } | { status: 'error'; error: string };
+/** 맥북에 보낼 용지: QR 문자열 또는 직접 입력 */
+export type PurchasePayload = { qr: string } | { round: number; games: number[][] };
 
-async function postQr(qr: string): Promise<'saved' | 'duplicate'> {
+async function postPurchase(p: PurchasePayload): Promise<'saved' | 'duplicate'> {
   const res = await fetch(`${API_BASE}/purchases`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ qr }),
+    body: JSON.stringify(p),
     signal: AbortSignal.timeout(8_000),
   });
   const body = (await res.json().catch(() => ({}))) as { duplicate?: boolean; error?: string };
@@ -114,36 +113,74 @@ async function postQr(qr: string): Promise<'saved' | 'duplicate'> {
   return body.duplicate ? 'duplicate' : 'saved';
 }
 
+/** 예전 버전은 QR 문자열만 보관했음 → 객체로 변환 */
+const readPending = (): PurchasePayload[] => read<(PurchasePayload | string)[]>(PENDING_KEY, []).map((p) => (typeof p === 'string' ? { qr: p } : p));
+const sameTicket = (a: PurchasePayload, b: PurchasePayload) => JSON.stringify(a) === JSON.stringify(b);
+
 /** 맥북에 저장. 연결이 안 되면 기기에 보관했다가 다음 동기화 때 전송 */
-export async function savePurchaseQr(qr: string): Promise<SaveResult> {
+export async function savePurchase(p: PurchasePayload): Promise<SaveResult> {
   try {
-    return { status: await postQr(qr) };
+    return { status: await postPurchase(p) };
   } catch (e) {
     if ((e as { rejected?: boolean }).rejected) return { status: 'error', error: (e as Error).message };
-    const q = read<string[]>(PENDING_KEY, []);
-    if (!q.includes(qr)) write(PENDING_KEY, [...q, qr]);
+    const q = readPending();
+    if (!q.some((x) => sameTicket(x, p))) write(PENDING_KEY, [...q, p]);
     return { status: 'queued' };
   }
 }
 
-export const pendingPurchases = (): string[] => read<string[]>(PENDING_KEY, []);
+export const pendingPurchases = (): PurchasePayload[] => readPending();
 
 /** 보관 중인 구매 기록 전송. @returns 전송에 성공한 개수 */
 export async function flushPendingPurchases(): Promise<number> {
-  const q = pendingPurchases();
+  const q = readPending();
   if (q.length === 0) return 0;
-  const left: string[] = [];
+  const left: PurchasePayload[] = [];
   let sent = 0;
-  for (const qr of q) {
+  for (const p of q) {
     try {
-      await postQr(qr);
+      await postPurchase(p);
       sent++;
     } catch (e) {
-      if (!(e as { rejected?: boolean }).rejected) left.push(qr); // 거부된 건 버림, 연결 실패만 다시 시도
+      if (!(e as { rejected?: boolean }).rejected) left.push(p); // 거부된 건 버림, 연결 실패만 다시 시도
     }
   }
   write(PENDING_KEY, left);
   return sent;
+}
+
+/** 당첨금 수령 표시 */
+export async function setClaimed(key: string, slot: number, claimed: boolean): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/purchases/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, slot, claimed }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ───────── 앱 버전 ─────────
+
+export interface AppRelease {
+  versionCode: number;
+  versionName: string;
+  size: number;
+  builtAt: string;
+}
+
+/** 맥북에 배포된 최신 앱 (없거나 연결 안 되면 null) */
+export async function fetchLatestApp(): Promise<AppRelease | null> {
+  try {
+    const res = await fetch(`${API_BASE}/app`, { signal: AbortSignal.timeout(8_000) });
+    return res.ok ? ((await res.json()) as AppRelease) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 맥북에 저장된 구매 기록 (연결 안 되면 null) */

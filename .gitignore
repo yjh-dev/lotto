@@ -7,3 +7,4 @@ data/lotto.db-shm
 logs
 dist-app
 data/lotto.db
+release

@@ -1,7 +1,10 @@
-/** 번호 · 패턴 화면 (선택 기간 기준) */
+/** 통계 탭: 번호 · 패턴(선택 기간 기준) · 회차 조회 · 내 번호 시험 */
 import { bars, css, line, mount, refLine } from './charts.ts';
 import { ICONS, type View, type ViewCtx } from './view.ts';
-import { $, badge, card, chartBox, formula, fx, inkOn, loading, mix, pct, pv, tile } from './ui.ts';
+import { $, badge, balls, card, chartBox, eok, esc, formula, fx, inkOn, loading, mix, pct, pv, tile, won } from './ui.ts';
+import type { Draw } from '../data/types.ts';
+import { prizeRank } from '../stats/backtest.ts';
+import { perGameOdds } from '../recommend/odds.ts';
 
 const waiting = (c: ViewCtx) => loading(`${c.range.count.toLocaleString()}회 분석 중…`);
 
@@ -165,5 +168,131 @@ export const patternsView: View = {
       yMax: y,
       format: (v) => fx(v, 3),
     });
+  },
+};
+
+// ───────────────────────── 통계 탭 (번호 · 패턴 · 회차 조회 · 내 번호 시험) ─────────────────────────
+
+type Seg = 'numbers' | 'patterns' | 'rounds' | 'mine';
+const SEGS: { key: Seg; label: string }[] = [
+  { key: 'numbers', label: '번호' },
+  { key: 'patterns', label: '패턴' },
+  { key: 'rounds', label: '회차 조회' },
+  { key: 'mine', label: '내 번호 시험' },
+];
+let seg: Seg = 'numbers';
+let roundSel: number | null = null;
+let mineNums: number[] | null = null;
+
+export interface MineResult {
+  draws: number;
+  /** index 1~5 = 등수별 당첨 횟수 */
+  ranks: number[];
+  won: number;
+  spent: number;
+  /** 3등 이상 회차 */
+  bigWins: { round: number; rank: number; amount: number }[];
+}
+
+/** 이 번호를 기간 [from, to] 동안 매주 한 게임씩 샀다면 (당첨금은 그 회차 실제 1인 당첨금) */
+export function simulateMine(draws: readonly Draw[], numbers: readonly number[], from = 1, to = Infinity): MineResult {
+  const ranks = [0, 0, 0, 0, 0, 0];
+  let won_ = 0;
+  let n = 0;
+  const bigWins: MineResult['bigWins'] = [];
+  for (const d of draws) {
+    if (d.round < from || d.round > to) continue;
+    n++;
+    const r = prizeRank(numbers, d);
+    if (!r) continue;
+    ranks[r]++;
+    const amount = d.prizes[r - 1]?.amount ?? 0;
+    won_ += amount;
+    if (r <= 3) bigWins.push({ round: d.round, rank: r, amount });
+  }
+  return { draws: n, ranks, won: won_, spent: n * 1000, bigWins };
+}
+
+function roundsHtml(c: ViewCtx): string {
+  const last = c.draws.at(-1)!.round;
+  const r = Math.min(last, Math.max(c.draws[0].round, roundSel ?? last));
+  const d = c.draws.find((x) => x.round === r)!;
+  return `<form class="row" id="round-form"><button type="button" class="btn sm" data-step="-1">‹</button><input inputmode="numeric" name="round" value="${r}" class="round-input" aria-label="회차"><span>회</span><button type="button" class="btn sm" data-step="1">›</button><button class="btn sm">보기</button></form>
+    ${card(`${d.round}회 <span class="muted">${d.date}</span>`, `${balls(d.numbers, d.bonus)}
+      <div class="table-wrap"><table><thead><tr><th>등수</th><th class="num">당첨자</th><th class="num">1인 당첨금</th></tr></thead><tbody>${d.prizes
+        .map((p) => `<tr><td>${p.rank}등</td><td class="num">${p.winners.toLocaleString()}</td><td class="num">${won(p.amount)}</td></tr>`)
+        .join('')}</tbody></table></div>
+      ${d.totalSales ? `<p class="line muted">총판매 ${eok(d.totalSales, 0)}원</p>` : ''}`)}`;
+}
+
+function mineHtml(c: ViewCtx): string {
+  const inputs = Array.from({ length: 6 }, (_, i) => `<input inputmode="numeric" maxlength="2" value="${mineNums?.[i] ?? ''}">`).join('');
+  const form = `<form id="mine-form"><div class="entry-row mine">${inputs}</div><div class="row between"><span class="muted small">${esc(c.range.label)} · ${c.range.count}회 동안 매주 1게임</span><button class="btn sm primary">시험</button></div><p class="line warn-text" id="mine-err" hidden></p></form>`;
+  if (!mineNums) return card('내 번호 시험', form + '<p class="muted small">번호 6개를 넣으면 이 기간 동안 매주 샀을 때의 결과를 보여줍니다.</p>');
+  const r = simulateMine(c.draws, mineNums, c.range.from, c.range.to);
+  const per = perGameOdds();
+  const rows = [5, 4, 3, 2, 1]
+    .map((k) => `<tr><td>${k}등</td><td class="num">${r.ranks[k]}</td><td class="num">${fx(r.draws * per[k - 1].probability, k >= 4 ? 1 : 3)}</td></tr>`)
+    .join('');
+  return card(
+    '내 번호 시험',
+    `${form}${balls(mineNums, undefined, 'sm')}
+     <div class="tiles">${tile('구매', won(r.spent), `${r.draws}회`)}${tile('당첨금', won(r.won), `회수율 ${pct(r.won / Math.max(1, r.spent), 0)}`)}</div>
+     <div class="table-wrap"><table><thead><tr><th>등수</th><th class="num">실제</th><th class="num">이론 기대</th></tr></thead><tbody>${rows}</tbody></table></div>
+     ${r.bigWins.length ? `<p class="line">3등 이상: ${r.bigWins.map((w) => `${w.round}회 ${w.rank}등`).join(' · ')}</p>` : ''}
+     <p class="line muted">과거에 잘 맞았던 번호라도 다음 회차 확률은 모든 조합이 같습니다.</p>`,
+  );
+}
+
+export const statsView: View = {
+  key: 'stats',
+  label: '통계',
+  icon: ICONS.stats,
+  // 회차 조회는 기간과 무관 → 기간 선택 숨김
+  usesPeriod: () => seg !== 'rounds',
+  inNav: true,
+  render: (c) => {
+    const bar = `<div class="seg">${SEGS.map((s) => `<button class="${s.key === seg ? 'on' : ''}" data-seg="${s.key}">${s.label}</button>`).join('')}</div>`;
+    const body = seg === 'numbers' ? numbersView.render(c) : seg === 'patterns' ? patternsView.render(c) : seg === 'rounds' ? roundsHtml(c) : mineHtml(c);
+    return bar + body;
+  },
+  after: (c) => {
+    document.querySelector('.seg')?.addEventListener('click', (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-seg]');
+      if (!b || b.dataset.seg === seg) return;
+      seg = b.dataset.seg as Seg;
+      c.rerender();
+    });
+    if (seg === 'numbers') numbersView.after?.(c);
+    if (seg === 'patterns') patternsView.after?.(c);
+    if (seg === 'rounds') {
+      const form = $<HTMLFormElement>('#round-form')!;
+      const input = form.querySelector<HTMLInputElement>('input')!;
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        roundSel = Number(input.value) || null;
+        c.rerender();
+      });
+      form.querySelectorAll<HTMLButtonElement>('[data-step]').forEach((b) =>
+        b.addEventListener('click', () => {
+          roundSel = Number(input.value) + Number(b.dataset.step);
+          c.rerender();
+        }),
+      );
+    }
+    if (seg === 'mine') {
+      $<HTMLFormElement>('#mine-form')!.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const nums = [...(e.target as HTMLFormElement).querySelectorAll('input')].map((i) => Number(i.value));
+        const err = $('#mine-err')!;
+        if (nums.some((n) => !Number.isInteger(n) || n < 1 || n > 45) || new Set(nums).size !== 6) {
+          err.textContent = '1~45 중 서로 다른 6개를 넣어 주세요';
+          err.hidden = false;
+          return;
+        }
+        mineNums = nums.sort((a, b) => a - b);
+        c.rerender();
+      });
+    }
   },
 };

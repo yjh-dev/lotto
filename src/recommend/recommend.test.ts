@@ -90,9 +90,10 @@ test('규칙 감시: 공정한 추첨이면 경고 없음, 실제 비율 ≈ 무
   assert.ok(auditRules(odd).find((r) => r.key === 'oddEven')!.warn, '홀수만 나오는 회차가 많으면 경고');
 });
 
-test('추천: 30개 번호 서로 다름 · 규칙 통과 · 결정적 · 4등 이상 이론 최대', async () => {
+test('추천 5게임: 30개 번호 서로 다름 · 규칙 통과 · 결정적 · 4등 이상 이론 최대', async () => {
   const { exactSetOdds } = await import('./odds.ts');
-  const { recommend } = await import('./recommend.ts');
+  const { recommend: rec5 } = await import('./recommend.ts');
+  const recommend = (d: typeof draws, o: { seed?: number } = {}) => rec5(d, { games: 5, ...o });
   const rec = recommend(draws);
   assert.equal(rec.picks.length, 5);
   assert.equal(rec.targetRound, draws.at(-1)!.round + 1);
@@ -109,4 +110,96 @@ test('추천: 30개 번호 서로 다름 · 규칙 통과 · 결정적 · 4등 �
   // 서로소 묶음은 대칭 → 어떤 서로소 묶음과도 당첨 확률이 같음
   const ref = exactSetOdds([0, 1, 2, 3, 4].map((g) => [1, 2, 3, 4, 5, 6].map((n) => n + 6 * g)));
   close(o.anyPrize, ref.anyPrize, 1e-12, '당첨 확률 = 서로소 기준값');
+});
+
+test('고정 번호: 게임마다 하나씩, 30개 서로 다름 유지, 고정 없으면 기본 추천과 같음', async () => {
+  const { recommend: recAny } = await import('./recommend.ts');
+  const recommend = (d: typeof draws, o: { fixed?: number[] } = {}) => recAny(d, { games: 5, ...o });
+  const base = recommend(draws);
+  assert.deepEqual(recommend(draws, { fixed: [] }).picks, base.picks, '고정 없으면 시드 소비가 같아 기본 추천 그대로');
+  const r = recommend(draws, { fixed: [7, 14, 33] });
+  assert.deepEqual(r.fixed, [7, 14, 33]);
+  [7, 14, 33].forEach((n, i) => assert.ok(r.picks[i].numbers.includes(n), `${i + 1}번째 게임에 ${n}`));
+  assert.equal(new Set(r.picks.flatMap((p) => p.numbers)).size, 30);
+  const ctx = ruleContext(draws);
+  for (const p of r.picks) assert.deepEqual(ruleFlags(p.numbers, ctx), []);
+  assert.throws(() => recommend(draws, { fixed: [1, 2, 3, 4, 5, 6] }), /최대 5개/);
+});
+
+test('추천 10게임(기본): 게임끼리 겹침 ≤1 · 규칙 통과 · 4등 이상 = 10 × 11,350 (이론 최대) · 고정 번호', async () => {
+  const { exactSetOdds } = await import('./odds.ts');
+  const { recommend, DEFAULT_GAMES } = await import('./recommend.ts');
+  assert.equal(DEFAULT_GAMES, 10);
+  const rec = recommend(draws);
+  assert.equal(rec.picks.length, 10);
+  const ctx = ruleContext(draws);
+  for (const p of rec.picks) assert.deepEqual(ruleFlags(p.numbers, ctx), [], `규칙 위반 ${p.numbers}`);
+  for (let i = 0; i < 10; i++)
+    for (let j = i + 1; j < 10; j++) assert.ok(rec.picks[i].numbers.filter((n) => rec.picks[j].numbers.includes(n)).length <= 1, `겹침 ${i},${j}`);
+  assert.equal(new Set(rec.picks.slice(0, 7).flatMap((p) => p.numbers)).size, 42, '앞 7게임은 서로소');
+  assert.deepEqual(recommend(draws).picks, rec.picks, '결정적');
+  const o = exactSetOdds(rec.picks.map((p) => p.numbers));
+  close(o.atLeast4 * TOTAL_COMBOS, 10 * 11_350, 1e-6, '4등 이상 서로 배타');
+  close(o.atLeast5 * TOTAL_COMBOS, 10 * 235, 1e-6, '3등 이상 서로 배타');
+  const f = recommend(draws, { fixed: [9, 34] });
+  assert.ok(f.picks[0].numbers.includes(9) && f.picks[1].numbers.includes(34));
+  assert.equal(f.picks.filter((p) => p.numbers.includes(9)).length, 1, '고정 번호는 그 게임에만');
+});
+
+test('동점 처리(비인기 우선): 당첨 확률 그대로 · 인기도 배수 낮아짐 · 결정적', async () => {
+  const { exactSetOdds } = await import('./odds.ts');
+  const { recommend } = await import('./recommend.ts');
+  const { fitNumberPopularity, comboMultiplier } = await import('./popularity.ts');
+  const full = JSON.parse(readFileSync(new URL('../../data/draws.json', import.meta.url), 'utf8')).draws;
+  const pop = fitNumberPopularity(full);
+  assert.ok(pop.rows > 1000);
+  const avg = (ps: { numbers: number[] }[]) => ps.reduce((a, p) => a + comboMultiplier(pop, p.numbers), 0) / ps.length;
+  for (const games of [5, 10]) {
+    const a = recommend(full, { games });
+    const b = recommend(full, { games, popularity: pop });
+    const oa = exactSetOdds(a.picks.map((p) => p.numbers));
+    const ob = exactSetOdds(b.picks.map((p) => p.numbers));
+    close(ob.atLeast4, oa.atLeast4, 1e-15, `${games}게임 4등 이상 불변`);
+    close(ob.atLeast5, oa.atLeast5, 1e-15, `${games}게임 3등 이상 불변`);
+    assert.ok(avg(b.picks) < avg(a.picks), `${games}게임 인기도 ${avg(b.picks)} < ${avg(a.picks)}`);
+    close(b.popularity!.average, avg(b.picks), 1e-12);
+    assert.deepEqual(recommend(full, { games, popularity: pop }).picks, b.picks, '결정적');
+  }
+});
+
+test('인기도 모형: 합성 데이터에서 많이 고른 번호를 찾아냄', async () => {
+  const { fitNumberPopularity } = await import('./popularity.ts');
+  const rng = mulberry32(77);
+  const hot = new Set([3, 7, 11]);
+  const synth = simulateHistory(1500, rng).map((d) => {
+    const k = d.numbers.filter((n) => hot.has(n)).length;
+    const exp = 1000 * 182_780 / TOTAL_COMBOS; // 판매 100만 원 → 1000장
+    return { numbers: d.numbers, totalSales: 1_000_000_000, prizes: [1, 2, 3, 4, 5].map((r) => ({ winners: r === 5 ? Math.round(exp * 1000 * Math.exp(0.1 * k)) : 1 })) };
+  });
+  const p = fitNumberPopularity(synth);
+  const top = Array.from({ length: 45 }, (_, i) => i + 1).sort((a, b) => p.beta[b] - p.beta[a]).slice(0, 3);
+  assert.deepEqual(top.sort((a, b) => a - b), [3, 7, 11]);
+});
+
+test('핫 번호 방식: 게임마다 핫 번호 정확히 2개 · 핫 번호마다 2게임 · 겹침 ≤1 · 규칙 통과 · 4등 이상 그대로', async () => {
+  const { exactSetOdds } = await import('./odds.ts');
+  const { recommend, hotNumbers } = await import('./recommend.ts');
+  const hot = hotNumbers(draws, 10);
+  assert.equal(hot.length, 10);
+  const c = new Array(46).fill(0);
+  draws.slice(-50).forEach((d) => d.numbers.forEach((n) => c[n]++));
+  assert.ok(hot.every((h) => c[h] >= Math.max(...Array.from({ length: 45 }, (_, i) => i + 1).filter((n) => !hot.includes(n)).map((n) => c[n]))), '핫 = 최근 50회 상위');
+  const r = recommend(draws, { strategy: 'hot' });
+  assert.equal(r.strategy, 'hot');
+  assert.deepEqual(r.hot, hot);
+  for (const p of r.picks) assert.equal(p.numbers.filter((n) => hot.includes(n)).length, 2, `${p.numbers}`);
+  for (const h of hot) assert.equal(r.picks.filter((p) => p.numbers.includes(h)).length, 2, `핫 ${h}`);
+  for (let i = 0; i < 10; i++)
+    for (let j = i + 1; j < 10; j++) assert.ok(r.picks[i].numbers.filter((n) => r.picks[j].numbers.includes(n)).length <= 1);
+  const ctx = ruleContext(draws);
+  for (const p of r.picks) assert.deepEqual(ruleFlags(p.numbers, ctx), []);
+  const o = exactSetOdds(r.picks.map((p) => p.numbers));
+  close(o.atLeast4 * TOTAL_COMBOS, 10 * 11_350, 1e-6, '4등 이상 이론 최대 유지');
+  assert.deepEqual(recommend(draws, { strategy: 'hot' }).picks, r.picks, '결정적');
+  assert.throws(() => recommend(draws, { strategy: 'hot', fixed: [1] }));
 });

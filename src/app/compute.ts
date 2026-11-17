@@ -1,9 +1,10 @@
 /** 워커 호출 + 결과 캐시 (최신 회차·기간이 같으면 다시 계산하지 않음) */
 import type { Draw } from '../data/types.ts';
 import type { RecommendResult } from '../recommend/recommend.ts';
-import { RESULTS_VERSION, type PeriodResults, type WorkerRequest, type WorkerResponse } from './results.ts';
+import { RESULTS_VERSION, type HomeResults, type PeriodResults, type WorkerRequest, type WorkerResponse } from './results.ts';
 
 const PERIOD_KEY = `lotto.periods.v${RESULTS_VERSION}`;
+const HOME_KEY = `lotto.home.v${RESULTS_VERSION}`;
 /** 기간별 결과는 최근 사용한 것부터 이만큼만 보관 */
 const PERIOD_CACHE_SIZE = 6;
 export const DEFAULT_ITERATIONS = 1000;
@@ -51,6 +52,19 @@ function write(key: string, v: unknown) {
   }
 }
 
+// ───────── 홈 (이번 주 추천) ─────────
+
+export function cachedHome(lastRound: number): HomeResults | null {
+  const r = read<HomeResults>(HOME_KEY);
+  return r?.lastRound === lastRound ? r : null;
+}
+
+export async function computeHome(draws: Draw[]): Promise<HomeResults> {
+  const r = await call<HomeResults>({ type: 'home', draws });
+  write(HOME_KEY, r);
+  return r;
+}
+
 // ───────── 기간별 통계 ─────────
 
 export function cachedPeriod(lastRound: number, from: number, to: number): PeriodResults | null {
@@ -65,6 +79,6 @@ export async function computePeriod(draws: Draw[], from: number, to: number, ite
 }
 
 /** 같은 규칙(해제 목록 포함)으로 다른 시드에서 다시 추천 */
-export function reRecommend(draws: Draw[], seed: number, disabled: string[]): Promise<RecommendResult> {
-  return call<RecommendResult>({ type: 'recommend', draws, seed, disabled });
+export function reRecommend(draws: Draw[], seed: number, disabled: string[], fixed: number[] = [], strategy: 'default' | 'hot' = 'default'): Promise<RecommendResult> {
+  return call<RecommendResult>({ type: 'recommend', draws, seed, disabled, fixed, strategy });
 }

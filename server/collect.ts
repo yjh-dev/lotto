@@ -16,8 +16,10 @@ import { fetchRange } from '../src/data/dhlottery.ts';
 import { validateDataset } from '../src/data/normalize.ts';
 import type { RawDraw } from '../src/data/types.ts';
 import { auditRules } from '../src/recommend/rules.ts';
+import { fitNumberPopularity } from '../src/recommend/popularity.ts';
 import { recommend } from '../src/recommend/recommend.ts';
 import { DB_PATH, RAW_JSON, SEED_JSON } from './paths.ts';
+import { backupSafely } from './backup.ts';
 
 const args = new Set(process.argv.slice(2));
 const log = (...m: unknown[]) => console.log(new Date().toISOString(), ...m);
@@ -38,9 +40,13 @@ async function postProcess(repo: LottoRepository) {
   if (disabled.length) log(`⚠ 규칙 감시 경고 → 추천에서 해제: ${disabled.join(', ')}`);
 
   // 다음 회차 기본 추천 (시드 = 회차 번호 → 앱 "전체" 기간과 같은 결과). 이미 기록돼 있으면 유지.
-  const rec = recommend(draws, { disabled });
-  await repo.saveRecommendations(rec.targetRound, rec.seed, rec.picks);
-  log(`${rec.targetRound}회 기본 추천 기록:`, rec.picks.map((p) => p.numbers.join(',')).join(' | '));
+  // 두 방식 모두 기록 → 어느 쪽을 샀든 매주 둘 다 채점해 성적 비교
+  const popularity = fitNumberPopularity(draws);
+  for (const strategy of ['default', 'hot'] as const) {
+    const rec = recommend(draws, { disabled, popularity, strategy });
+    await repo.saveRecommendations(rec.targetRound, rec.seed, rec.picks, new Date(), strategy);
+    log(`${rec.targetRound}회 ${strategy === 'hot' ? '핫 번호' : '기본'} 추천 기록:`, rec.picks.map((p) => p.numbers.join(',')).join(' | '));
+  }
 
   // 앱 빌드용 초기 데이터 + 원본 백업
   await writeFile(SEED_JSON, JSON.stringify({ updatedAt: new Date().toISOString(), latest: draws.at(-1)!.round, draws }));
@@ -86,6 +92,8 @@ async function main() {
 
   if (added > 0 || args.has('--refresh')) await postProcess(repo);
   await db.close();
+  // 토요일 추첨 후 새 회차·채점이 반영됐을 때만 백업
+  if (added > 0) await backupSafely(`${last + added}회 수집`);
 }
 
 main().catch((e) => {

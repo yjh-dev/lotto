@@ -7,7 +7,7 @@
  *   구분 글자: q = 자동, m = 수동, s = 반자동, n = 빈 게임(000000000000)
  * 주소로 접속하지 않고 문자열만 해석한다.
  */
-export type GameMode = 'auto' | 'manual' | 'semi' | 'unknown';
+export type GameMode = 'auto' | 'manual' | 'semi' | 'entered' | 'unknown';
 
 export interface TicketGame {
   /** A~E 중 몇 번째 줄인지 (0부터) */
@@ -56,4 +56,21 @@ export function parseLottoQr(text: string): Ticket {
   return { round, games, key: v };
 }
 
-export const MODE_LABEL: Record<GameMode, string> = { auto: '자동', manual: '수동', semi: '반자동', unknown: '?' };
+export const MODE_LABEL: Record<GameMode, string> = { auto: '자동', manual: '수동', semi: '반자동', entered: '직접 입력', unknown: '?' };
+
+/**
+ * QR이 안 읽힐 때 직접 입력한 용지. 같은 내용을 두 번 입력해도 한 번만 저장되도록 키 = 회차 + 번호
+ * (실제로 같은 번호 용지를 두 장 샀다면 QR 스캔을 쓰거나 한 장씩 다른 줄 순서로 입력)
+ */
+export function enteredTicket(round: number, games: readonly (readonly number[])[]): Ticket {
+  if (!Number.isInteger(round) || round < 1 || round > 9999) throw new QrError('회차가 올바르지 않습니다');
+  if (games.length === 0 || games.length > 5) throw new QrError('게임은 1~5개');
+  const out = games.map((g, slot) => {
+    if (!Array.isArray(g)) throw new QrError(`${slot + 1}번째 게임 형식이 올바르지 않습니다`);
+    const numbers = [...g].map(Number).sort((a, b) => a - b);
+    if (numbers.length !== 6 || numbers.some((n) => !Number.isInteger(n) || n < 1 || n > 45) || new Set(numbers).size !== 6)
+      throw new QrError(`${slot + 1}번째 게임: 1~45 서로 다른 6개가 필요합니다`);
+    return { slot, mode: 'entered' as const, numbers };
+  });
+  return { round, games: out, key: `e${round}-${out.map((g) => g.numbers.map((n) => String(n).padStart(2, '0')).join('')).join('-')}` };
+}

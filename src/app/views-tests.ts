@@ -73,6 +73,7 @@ export const testsView: View = {
   label: '검정',
   icon: ICONS.tests,
   usesPeriod: true,
+  inNav: true,
   render: (c) => {
     if (!c.period) return loading(`${c.range.count.toLocaleString()}회 분석 중…`);
     const a = c.period.analysis;
@@ -205,7 +206,7 @@ export const testsView: View = {
       formula('P(k개 일치) = C(6,k)·C(39,6−k) / C(45,6)'),
     );
 
-    return summary + `<div class="sections">${power}${eras}${bonus}${bayes}${sim}${backtest}${rules}${odds}</div>`;
+    return summary + `<div class="sections">${rules}${power}${eras}${bonus}${bayes}${sim}${backtest}${odds}</div>`;
   },
   after: (c) => {
     document.querySelectorAll<HTMLDetailsElement>('details.section').forEach((d) => {

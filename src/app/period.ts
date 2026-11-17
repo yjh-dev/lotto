@@ -1,14 +1,15 @@
 /** 분석 기간(표본) 선택 */
 import type { Draw } from '../data/types.ts';
 
-export type PeriodKey = 'all' | '10y' | '5y' | '3y' | '1y' | 'custom';
+export type PeriodKey = 'all' | 'r500' | 'r300' | 'r100' | 'r50' | 'custom';
 
-export const PRESETS: { key: PeriodKey; label: string; weeks?: number }[] = [
+/** 최근 N회 기준 (연 단위 대신 회차 수) */
+export const PRESETS: { key: PeriodKey; label: string; rounds?: number }[] = [
   { key: 'all', label: '전체' },
-  { key: '10y', label: '10년', weeks: 522 },
-  { key: '5y', label: '5년', weeks: 261 },
-  { key: '3y', label: '3년', weeks: 157 },
-  { key: '1y', label: '1년', weeks: 52 },
+  { key: 'r500', label: '500회', rounds: 500 },
+  { key: 'r300', label: '300회', rounds: 300 },
+  { key: 'r100', label: '100회', rounds: 100 },
+  { key: 'r50', label: '50회', rounds: 50 },
   { key: 'custom', label: '직접' },
 ];
 
@@ -35,7 +36,7 @@ export function resolvePeriod(sel: PeriodSel, draws: readonly Draw[]): ResolvedP
   const preset = PRESETS.find((p) => p.key === sel.key) ?? PRESETS[0];
   let from = first;
   let to = last;
-  if (preset.weeks) from = Math.max(first, last - preset.weeks + 1);
+  if (preset.rounds) from = Math.max(first, last - preset.rounds + 1);
   if (sel.key === 'custom' && sel.from && sel.to) {
     to = Math.min(last, Math.max(sel.from, sel.to));
     from = Math.max(first, Math.min(sel.from, sel.to));
@@ -48,7 +49,7 @@ export function resolvePeriod(sel: PeriodSel, draws: readonly Draw[]): ResolvedP
     from,
     to,
     count: to - from + 1,
-    label: `${from}~${to}회 · ${fromDate.slice(0, 7).replace('-', '.')}~${toDate.slice(0, 7).replace('-', '.')}`,
+    label: `${preset.rounds ? `최근 ${to - from + 1}회 · ` : ''}${from}~${to}회 (${fromDate.slice(0, 7).replace('-', '.')}~${toDate.slice(0, 7).replace('-', '.')})`,
   };
 }
 
@@ -56,7 +57,9 @@ const KEY = 'lotto.period.v1';
 
 export function loadPeriodSel(): PeriodSel {
   try {
-    return (JSON.parse(localStorage.getItem(KEY) ?? 'null') as PeriodSel | null) ?? { key: 'all' };
+    const sel = JSON.parse(localStorage.getItem(KEY) ?? 'null') as PeriodSel | null;
+    // 예전 연 단위 키(10y 등)는 전체로
+    return sel && PRESETS.some((p) => p.key === sel.key) ? sel : { key: 'all' };
   } catch {
     return { key: 'all' };
   }

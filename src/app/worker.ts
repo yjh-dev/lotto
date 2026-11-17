@@ -4,25 +4,36 @@ import type { Draw } from '../data/types.ts';
 import { runAnalysis } from '../stats/analysis.ts';
 import { runBacktest } from '../stats/backtest.ts';
 import { auditRules } from '../recommend/rules.ts';
+import { fitNumberPopularity } from '../recommend/popularity.ts';
 import { recommend as baseRecommend, type RecommendOptions, type RecommendResult } from '../recommend/recommend.ts';
 import { exactSetOdds } from '../recommend/odds.ts';
-import { RESULTS_VERSION, type PeriodResults, type WorkerRequest, type WorkerResponse } from './results.ts';
+import { RESULTS_VERSION, type HomeResults, type PeriodResults, type WorkerRequest, type WorkerResponse } from './results.ts';
 
 /** 백테스트는 판매·당첨금 데이터가 안정된 262회부터 */
 const BACKTEST_FROM = 262;
 
 /** 추천 + 묶음 당첨 확률(모든 당첨번호 대입, 약 0.3초) */
 function recommend(draws: Draw[], opts?: RecommendOptions): RecommendResult {
-  const r = baseRecommend(draws, opts);
+  // 동점일 때 비인기 조합 우선 (확률 불변) — 모형 적합 약 30ms
+  const r = baseRecommend(draws, { ...opts, popularity: fitNumberPopularity(draws) });
   return { ...r, setOdds: exactSetOdds(r.picks.map((p) => p.numbers)) };
 }
 
 function compute(req: WorkerRequest): unknown {
   const draws = req.draws as Draw[];
+  if (req.type === 'home') {
+    const disabled = auditRules(draws).filter((a) => a.warn).map((a) => a.key);
+    return {
+      version: RESULTS_VERSION,
+      lastRound: draws.at(-1)!.round,
+      disabled,
+      recommendation: recommend(draws, { disabled }),
+      hotRecommendation: recommend(draws, { disabled, strategy: 'hot' }),
+    } satisfies HomeResults;
+  }
   if (req.type === 'period') {
     const sample = draws.filter((d) => d.round >= req.from && d.round <= req.to);
     const btFrom = Math.max(BACKTEST_FROM, req.from);
-    const audit = auditRules(draws, req.from, req.to);
     return {
       version: RESULTS_VERSION,
       lastRound: draws.at(-1)!.round,
@@ -32,12 +43,10 @@ function compute(req: WorkerRequest): unknown {
       analysis: runAnalysis(sample, { iterations: req.iterations }),
       // 각 회차 예측에는 그 이전 전체 이력을 쓰고, 평가는 선택 기간 안에서만
       backtest: btFrom <= req.to ? runBacktest(draws, undefined, { startRound: btFrom, endRound: req.to }) : null,
-      audit,
-      // 규칙 판정(과거 조합·최근 10회)은 항상 실제 최신 데이터 기준, 해제 여부만 선택 기간 감시 결과로
-      recommendation: recommend(draws, { disabled: audit.filter((a) => a.warn).map((a) => a.key) }),
+      audit: auditRules(draws, req.from, req.to),
     } satisfies PeriodResults;
   }
-  return recommend(draws, { seed: req.seed, disabled: req.disabled });
+  return recommend(draws, { seed: req.seed, disabled: req.disabled, fixed: req.fixed, strategy: req.strategy });
 }
 
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {

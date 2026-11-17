@@ -10,3 +10,10 @@ export const SEED_JSON = resolve(ROOT, 'data/draws.json');
 export const RAW_JSON = resolve(ROOT, 'data/raw-draws.json');
 /** 빌드된 웹 화면 */
 export const DIST_DIR = resolve(ROOT, 'dist');
+/** DB 백업 폴더 (iCloud Drive — 맥북 디스크가 망가져도 남도록) */
+export const BACKUP_DIR =
+  process.env.LOTTO_BACKUP_DIR ?? resolve(process.env.HOME ?? ROOT, 'Library/Mobile Documents/com~apple~CloudDocs/lotto-backup');
+/** 휴대폰이 받아 갈 최신 APK와 버전 정보 (npm run apk가 갱신) */
+export const RELEASE_DIR = resolve(ROOT, 'release');
+/** iCloud에 못 쓸 때(권한) 대신 쓰는 맥북 안 백업 폴더 */
+export const LOCAL_BACKUP_DIR = resolve(process.env.HOME ?? ROOT, 'lotto-backups');

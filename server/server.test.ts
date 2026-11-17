@@ -73,6 +73,13 @@ test('추천 이력: 한 번만 기록, 추첨 후 채점', async () => {
   assert.equal(await repo.evaluateRecommendations(), 3);
   const recs = await repo.listRecommendations();
   assert.deepEqual(recs.map((r) => [r.numbers[0], r.matched, r.prizeRank]), [[1, 5, 2], [1, 3, 5], [20, 0, 0]]);
+  assert.ok(recs.every((r) => r.strategy === 'default'));
+  // 핫 번호 방식은 같은 회차에 따로 기록 (idx 100~), 채점도 함께
+  await repo.saveRecommendations(2, 2, [pick([1, 2, 3, 4, 40, 41])], new Date(), 'hot');
+  await repo.saveRecommendations(2, 2, [pick([9, 9, 9, 9, 9, 9])], new Date(), 'hot'); // 이미 있으면 무시
+  assert.equal(await repo.evaluateRecommendations(), 1);
+  const hot = (await repo.listRecommendations()).filter((r) => r.strategy === 'hot');
+  assert.deepEqual(hot.map((r) => [r.idx, r.numbers[3], r.prizeRank]), [[100, 4, 4]]);
 });
 
 test('요청 정책: 최신이면 안 함, 실패하면 1시간 → 6시간 간격', () => {
@@ -154,4 +161,66 @@ test('구매 기록 API: 저장 · 중복 무시 · 추첨 후 채점(당첨금)
   } finally {
     server.close();
   }
+});
+
+test('직접 입력 · 당첨금 수령 표시 · 앱 버전 API', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const repo = await freshRepo();
+  await repo.upsertDraws([{ draw: mkDraw(1, [1, 2, 3, 4, 5, 6], 7) }], 'api');
+  const rel = mkdtempSync(join(tmpdir(), 'lotto-rel-'));
+  const server = createApp(repo, { releaseDir: rel }).listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    // 직접 입력: 1회 [1,2,3,4,10,11] → 4개 일치 4등 (mkDraw 4등 금액 2000)
+    const r = await post('/api/purchases', { round: 1, games: [[11, 10, 4, 3, 2, 1], [20, 21, 22, 23, 24, 25]] });
+    assert.equal(r.status, 201);
+    assert.equal((await post('/api/purchases', { round: 1, games: [[11, 10, 4, 3, 2, 1], [20, 21, 22, 23, 24, 25]] })).status, 200, '같은 내용 다시 입력 → 중복');
+    assert.equal((await post('/api/purchases', { round: 1, games: [[1, 2, 3, 4, 5, 46]] })).status, 400);
+    assert.equal((await post('/api/purchases', { round: 1, games: ['x'] })).status, 400);
+    let list = await repo.listPurchases();
+    const win = list.find((p) => p.prizeRank === 4)!;
+    assert.equal(win.mode, 'entered');
+    assert.equal(win.prizeAmount, 2000);
+    assert.equal(win.claimedAt, null);
+    // 수령 표시: 당첨 게임만, 다시 누르면 취소
+    assert.equal(((await (await post('/api/purchases/claim', { key: win.ticketKey, slot: win.slot, claimed: true })).json()) as { updated: number }).updated, 1);
+    assert.ok((await repo.listPurchases()).find((p) => p.prizeRank === 4)!.claimedAt);
+    const lose = list.find((p) => p.prizeRank === 0)!;
+    assert.equal(((await (await post('/api/purchases/claim', { key: lose.ticketKey, slot: lose.slot, claimed: true })).json()) as { updated: number }).updated, 0, '낙첨은 수령 표시 안 됨');
+    await post('/api/purchases/claim', { key: win.ticketKey, slot: win.slot, claimed: false });
+    list = await repo.listPurchases();
+    assert.equal(list.find((p) => p.prizeRank === 4)!.claimedAt, null);
+    // 앱 버전: 배포 전 404, 배포 후 버전·APK
+    assert.equal((await fetch(`${base}/api/app`)).status, 404);
+    writeFileSync(join(rel, 'app.json'), JSON.stringify({ versionCode: 3, versionName: '1.2', size: 4, builtAt: 'x' }));
+    writeFileSync(join(rel, 'lotto.apk'), 'APK!');
+    assert.equal(((await (await fetch(`${base}/api/app`)).json()) as { versionCode: number }).versionCode, 3);
+    const apk = await fetch(`${base}/lotto.apk`);
+    assert.equal(apk.headers.get('content-type'), 'application/vnd.android.package-archive');
+    assert.equal(await apk.text(), 'APK!');
+  } finally {
+    server.close();
+  }
+});
+
+test('백업: 실행 중 DB의 사본 · 최근 10개만 유지', async () => {
+  const { mkdtempSync, readdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { backupTo } = await import('./backup.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'lotto-bk-'));
+  const dbPath = join(dir, 'src.db');
+  const repo = new LottoRepository(openNodeDb(dbPath));
+  await repo.init();
+  await repo.upsertDraws([{ draw: mkDraw(1, [1, 2, 3, 4, 5, 6], 7) }], 'api');
+  const out = join(dir, 'out');
+  let file = '';
+  for (let i = 0; i < 12; i++) file = backupTo(out, dbPath, new Date(Date.UTC(2026, 0, 1, 0, i)));
+  assert.equal(readdirSync(out).length, 10);
+  const copy = new LottoRepository(openNodeDb(file));
+  assert.equal(await copy.count(), 1, '백업 파일에 회차 데이터 있음');
 });
