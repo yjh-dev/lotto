@@ -8,3 +8,6 @@ logs
 dist-app
 data/lotto.db
 release
+# 맥북 Tailscale 주소 등 공개하지 않을 설정
+.env.app
+.env*.local

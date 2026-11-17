@@ -1,6 +1,6 @@
 /**
  * 맥북 서버 주소. 개발(Vite)·맥북이 제공하는 웹 화면: 같은 주소의 '/api'.
- * APK: 빌드 시 VITE_API_BASE=https://<맥북>.<tailnet>.ts.net:8443/api (scripts/release-app.ts)
+ * APK: npm run apk가 .env.app(git 제외)의 LOTTO_API_BASE를 VITE_API_BASE로 넣어 빌드 (scripts/release-app.ts)
  * (Node 테스트에서는 import.meta.env가 없음)
  */
 const env = (import.meta as { env?: Record<string, string | undefined> }).env ?? {};
