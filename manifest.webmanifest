@@ -1,0 +1,16 @@
+{
+  "name": "로또 통계",
+  "short_name": "로또 통계",
+  "description": "로또 6/45 통계 분석·추천",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FCFCFB",
+  "theme_color": "#FFCF33",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
